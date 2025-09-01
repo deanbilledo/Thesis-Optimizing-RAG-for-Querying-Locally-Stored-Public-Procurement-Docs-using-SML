@@ -1,6 +1,30 @@
-flask==2.0.1
-faiss-cpu==1.7.2
-numpy==1.21.2
-PyPDF2==3.0.1
-sentence-transformers==2.2.2
-requests==2.26.0
+# Core deep learning stack
+torch==2.2.2+cu121        # CUDA-enabled PyTorch build (works with CUDA 12.1+)
+torchaudio==2.2.2+cu121
+torchvision==0.17.2+cu121
+
+# HuggingFace ecosystem
+transformers==4.39.3
+datasets==2.19.1
+accelerate==0.30.0
+peft==0.10.0
+trl==0.8.1
+safetensors==0.4.3
+
+# Tokenizers / SentencePiece
+sentencepiece==0.2.0
+protobuf==4.25.3
+
+# Training utilities
+tqdm==4.66.2
+rich==13.7.1
+
+# Unsloth (latest as of Aug 2025)
+unsloth==2025.8.10
+unsloth_zoo==2025.8.9
+
+# Optional (useful extras)
+numpy==1.26.4
+scipy==1.13.1
+pandas==2.2.2
+matplotlib==3.9.0

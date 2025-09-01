@@ -9,6 +9,9 @@ import PyPDF2
 from sentence_transformers import SentenceTransformer
 import requests
 from pathlib import Path
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
@@ -19,6 +22,10 @@ VECTOR_DIMENSION = 384  # Dimension for embeddings (depends on model used)
 CHUNK_SIZE = 500  # Characters per chunk
 CHUNK_OVERLAP = 50  # Overlap between chunks
 
+# Fine-tuned model configuration
+FINETUNED_MODEL_PATH = "model-training/tinyllama_procurement_20250830_104738"  # Your actual model path
+BASE_MODEL_NAME = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+
 # Create necessary directories
 Path(UPLOAD_FOLDER).mkdir(exist_ok=True)
 Path(DB_FOLDER).mkdir(exist_ok=True)
@@ -26,9 +33,74 @@ Path(DB_FOLDER).mkdir(exist_ok=True)
 # Initialize embedding model
 model = SentenceTransformer('paraphrase-MiniLM-L6-v2')  # Small, fast model
 
+# Initialize fine-tuned model (lazy loading)
+finetuned_model = None
+finetuned_tokenizer = None
+
 # Initialize FAISS index
 faiss_index = faiss.IndexFlatL2(VECTOR_DIMENSION)  # Renamed from 'index' to 'faiss_index'
 document_chunks = []  # Store text chunks corresponding to vectors
+
+def load_finetuned_model():
+    """Load the fine-tuned TinyLlama model."""
+    global finetuned_model, finetuned_tokenizer
+    
+    if finetuned_model is None:
+        try:
+            print("Loading fine-tuned TinyLlama model...")
+            
+            # Check device availability
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"Using device: {device}")
+            
+            # Load tokenizer
+            finetuned_tokenizer = AutoTokenizer.from_pretrained(
+                BASE_MODEL_NAME,
+                trust_remote_code=True,
+                padding_side="right"
+            )
+            
+            # Add pad token if it doesn't exist
+            if finetuned_tokenizer.pad_token is None:
+                finetuned_tokenizer.pad_token = finetuned_tokenizer.eos_token
+                finetuned_tokenizer.pad_token_id = finetuned_tokenizer.eos_token_id
+            
+            # Load base model
+            base_model = AutoModelForCausalLM.from_pretrained(
+                BASE_MODEL_NAME,
+                device_map="auto" if device == "cuda" else None,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                trust_remote_code=True
+            )
+            
+            if device == "cpu":
+                base_model = base_model.to(device)
+            
+            # Load LoRA weights
+            finetuned_model = PeftModel.from_pretrained(base_model, FINETUNED_MODEL_PATH)
+            finetuned_model.eval()
+            
+            print("Fine-tuned model loaded successfully!")
+            
+        except Exception as e:
+            print(f"Error loading fine-tuned model: {e}")
+            print("Falling back to base model...")
+            
+            # Fallback to base model
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            finetuned_tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
+            if finetuned_tokenizer.pad_token is None:
+                finetuned_tokenizer.pad_token = finetuned_tokenizer.eos_token
+            
+            finetuned_model = AutoModelForCausalLM.from_pretrained(
+                BASE_MODEL_NAME,
+                device_map="auto" if device == "cuda" else None,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32
+            )
+            if device == "cpu":
+                finetuned_model = finetuned_model.to(device)
+    
+    return finetuned_model, finetuned_tokenizer
 
 # Load existing index if available
 def load_index():
@@ -109,7 +181,79 @@ def add_document_to_index(file_path):
     save_index()
     return {"success": True, "chunks_added": len(chunks)}
 
-# Query Ollama using retrieval augmentation
+# Query using fine-tuned TinyLlama with retrieval augmentation
+def query_finetuned_model(query, top_k=3):
+    # Get query embedding
+    query_embedding = model.encode([query])
+    faiss.normalize_L2(query_embedding)
+    
+    # Search in FAISS
+    D, I = faiss_index.search(query_embedding, top_k)
+    
+    if len(I[0]) == 0:
+        return {"response": "No relevant information found. Please upload some documents first."}
+    
+    # Get relevant contexts
+    contexts = []
+    for idx in I[0]:
+        if idx < len(document_chunks):
+            contexts.append(document_chunks[idx]["text"])
+    
+    # Build prompt with context
+    context_text = "\n\n".join(contexts)
+    prompt = f"""Document Context: {context_text}
+
+Question: {query}
+
+Answer: """
+    
+    # Load model if not already loaded
+    model_instance, tokenizer = load_finetuned_model()
+    
+    if model_instance is None:
+        return {"error": "Failed to load fine-tuned model"}
+    
+    try:
+        # Load model if not already loaded
+        model_instance, tokenizer = load_finetuned_model()
+        
+        if model_instance is None:
+            return {"error": "Failed to load fine-tuned model"}
+        
+        # Get device from model
+        device = next(model_instance.parameters()).device
+        
+        # Tokenize input and move to correct device
+        inputs = tokenizer.encode(prompt, return_tensors="pt", max_length=1024, truncation=True)
+        inputs = inputs.to(device)
+        
+        # Create attention mask
+        attention_mask = torch.ones_like(inputs).to(device)
+        
+        # Generate response
+        with torch.no_grad():
+            outputs = model_instance.generate(
+                inputs,
+                attention_mask=attention_mask,
+                max_length=inputs.shape[1] + 200,  # Generate up to 200 new tokens
+                temperature=0.7,
+                do_sample=True,
+                pad_token_id=tokenizer.eos_token_id,
+                no_repeat_ngram_size=2
+            )
+        
+        # Decode response
+        response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+        
+        # Extract only the generated part (after the prompt)
+        generated_text = response[len(prompt):].strip()
+        
+        return {"response": generated_text if generated_text else "I couldn't generate a response based on the provided context."}
+        
+    except Exception as e:
+        return {"error": f"Error generating response: {str(e)}"}
+
+# Legacy Ollama function (keeping as fallback)
 def query_ollama(query, top_k=3):
     # Get query embedding
     query_embedding = model.encode([query])
@@ -194,19 +338,54 @@ def query():
     if not data or 'query' not in data:
         return jsonify({"error": "No query provided"}), 400
     
-    result = query_ollama(data['query'])
+    # Use fine-tuned model by default, fallback to Ollama if specified
+    use_ollama = data.get('use_ollama', False)
+    
+    if use_ollama:
+        result = query_ollama(data['query'])
+    else:
+        result = query_finetuned_model(data['query'])
+    
     return jsonify(result)
 
 @app.route('/uploads/<filename>')
 def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
+@app.route('/models', methods=['GET'])
+def get_available_models():
+    """Get information about available models."""
+    return jsonify({
+        "models": [
+            {
+                "name": "finetuned_tinyllama",
+                "display_name": "Fine-tuned TinyLlama (Procurement)",
+                "description": "TinyLlama model fine-tuned on procurement documents",
+                "available": os.path.exists(FINETUNED_MODEL_PATH),
+                "default": True
+            },
+            {
+                "name": "ollama_llama3.2",
+                "display_name": "Llama 3.2 3B (Ollama)",
+                "description": "General-purpose Llama 3.2 model via Ollama",
+                "available": check_ollama_connection(),
+                "default": False
+            }
+        ]
+    })
+
 @app.route('/status', methods=['GET'])
 def status():
+    # Check if fine-tuned model exists
+    finetuned_available = os.path.exists(FINETUNED_MODEL_PATH)
+    
     return jsonify({
         "documents_count": len(set(chunk["metadata"]["source"] for chunk in document_chunks)),
         "chunks_count": len(document_chunks),
-        "ollama_status": "connected" if check_ollama_connection() else "disconnected"
+        "ollama_status": "connected" if check_ollama_connection() else "disconnected",
+        "finetuned_model_available": finetuned_available,
+        "finetuned_model_path": FINETUNED_MODEL_PATH,
+        "model_loaded": finetuned_model is not None
     })
 
 def check_ollama_connection():
