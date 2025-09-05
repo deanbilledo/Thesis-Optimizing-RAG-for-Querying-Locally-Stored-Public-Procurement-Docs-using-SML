@@ -19,6 +19,9 @@ protobuf==4.25.3
 tqdm==4.66.2
 rich==13.7.1
 
+# Quantization (for memory efficiency)
+bitsandbytes==0.43.1
+
 # Unsloth (latest as of Aug 2025)
 unsloth==2025.8.10
 unsloth_zoo==2025.8.9
