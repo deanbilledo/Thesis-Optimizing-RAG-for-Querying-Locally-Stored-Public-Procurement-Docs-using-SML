@@ -397,6 +397,60 @@ main {
     color: #192535;
 }
 
+/* Model selector styles */
+.model-selector-container {
+    padding: 1rem;
+    background-color: #fff;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.model-selector-container label {
+    font-weight: 600;
+    color: #192535;
+    font-size: 0.9rem;
+}
+
+.model-selector {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    background-color: #fff;
+    cursor: pointer;
+    min-width: 200px;
+}
+
+.model-selector:focus {
+    outline: none;
+    border-color: #c1a06d;
+    box-shadow: 0 0 0 2px rgba(193, 160, 109, 0.2);
+}
+
+.model-status {
+    font-size: 0.8rem;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    font-weight: 500;
+}
+
+.model-status.available {
+    color: #166534;
+    background-color: #dcfce7;
+}
+
+.model-status.unavailable {
+    color: #dc2626;
+    background-color: #fef2f2;
+}
+
+.model-status.loading {
+    color: #d97706;
+    background-color: #fef3c7;
+}
+
 .chat-input {
     display: flex;
     padding: 1rem;

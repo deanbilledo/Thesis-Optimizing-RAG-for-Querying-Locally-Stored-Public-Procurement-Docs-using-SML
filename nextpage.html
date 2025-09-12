@@ -163,9 +163,49 @@
                 </div>
             </div>
 
-            <div class="chat-input">
-                <input type="text" placeholder="Hey! Ask me anything about your PDF.">
-                <button class="send-button"><i class="fas fa-arrow-right"></i></button>
+            <div class="chat-input-container">
+                <!-- Model Selection -->
+                <div class="model-selection">
+                    <label for="model-select">Model:</label>
+                    <select id="model-select" class="model-dropdown">
+                        <option value="">Loading models...</option>
+                    </select>
+                    <span id="model-status" class="model-status"></span>
+                </div>
+                
+                <!-- Query Input -->
+                <div class="chat-input">
+                    <input type="text" id="query-input" placeholder="Hey! Ask me anything about your PDF.">
+                    <button class="send-button" id="send-button"><i class="fas fa-arrow-right"></i></button>
+                </div>
+                
+                <!-- Query Options -->
+                <div class="query-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="use-ollama">
+                        <span class="checkmark"></span>
+                        Use Ollama (fallback)
+                    </label>
+                </div>
+            </div>
+            
+            <!-- Response Container -->
+            <div id="response-container" class="response-container" style="display: none;">
+                <div class="response-header">
+                    <h3>Response</h3>
+                    <span id="model-used" class="model-badge"></span>
+                </div>
+                <div id="response-text" class="response-text"></div>
+                <div id="sources-container" class="sources-container" style="display: none;">
+                    <h4>Sources:</h4>
+                    <ul id="sources-list"></ul>
+                </div>
+            </div>
+            
+            <!-- Loading Indicator -->
+            <div id="loading" class="loading" style="display: none;">
+                <div class="spinner"></div>
+                <span>Processing your query...</span>
             </div>
         </div>
     </main>

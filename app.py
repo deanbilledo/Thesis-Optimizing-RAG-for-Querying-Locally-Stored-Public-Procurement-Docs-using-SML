@@ -10,7 +10,7 @@ from sentence_transformers import SentenceTransformer
 import requests
 from pathlib import Path
 import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from peft import PeftModel
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -22,52 +22,176 @@ VECTOR_DIMENSION = 384  # Dimension for embeddings (depends on model used)
 CHUNK_SIZE = 500  # Characters per chunk
 CHUNK_OVERLAP = 50  # Overlap between chunks
 
-# Fine-tuned model configuration
-FINETUNED_MODEL_PATH = "model-training/tinyllama_procurement_20250830_104738"  # Your actual model path
-BASE_MODEL_NAME = "TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T"
+# Available models configuration
+AVAILABLE_MODELS = {
+    "gemma_procurement_lora": {
+        "name": "Gemma 2B (LoRA Fine-tuned)",
+        "type": "lora",
+        "base_model": "model-training/gemma-2b",
+        "lora_path": "model-training/procurement-lora-checkpoint-gemma",
+        "description": "Gemma 2B fine-tuned on procurement documents using LoRA"
+    },
+    "gemma_procurement_merged": {
+        "name": "Gemma 2B (Merged Fine-tuned)",
+        "type": "merged",
+        "model_path": "model-training/procurement-merged-gemma",
+        "description": "Gemma 2B with LoRA weights merged - ready to use"
+    },
+    "phi3_procurement_lora": {
+        "name": "Phi-3 Mini (LoRA Fine-tuned)",
+        "type": "lora",
+        "base_model": "model-training/Phi-3-mini-4k-instruct",
+        "lora_path": "model-training/procurement-lora-checkpoint-phi",
+        "description": "Phi-3 Mini fine-tuned on procurement documents using LoRA"
+    },
+    "phi3_procurement_merged": {
+        "name": "Phi-3 Mini (Merged Fine-tuned)",
+        "type": "merged",
+        "model_path": "model-training/procurement-merged-phi",
+        "description": "Phi-3 Mini with LoRA weights merged"
+    },
+    "llama_procurement_lora": {
+        "name": "Llama 3.2 3B (LoRA Fine-tuned)",
+        "type": "lora",
+        "base_model": "model-training/Llama-3.2-3B-Instruct",
+        "lora_path": "model-training/procurement-lora-checkpoint-llama",
+        "description": "Llama 3.2 3B fine-tuned on procurement documents using LoRA"
+    },
+    "llama_procurement_merged": {
+        "name": "Llama 3.2 3B (Merged Fine-tuned)",
+        "type": "merged",
+        "model_path": "model-training/procurement-merged-llama",
+        "description": "Llama 3.2 3B with LoRA weights merged"
+    },
+    "gemma_base": {
+        "name": "Gemma 2B (Base Model)",
+        "type": "base",
+        "model_path": "gemma-2b",
+        "description": "Base Gemma 2B model without fine-tuning"
+    }
+}
+
+# Default model
+DEFAULT_MODEL = "gemma_procurement_merged"
 
 # Create necessary directories
 Path(UPLOAD_FOLDER).mkdir(exist_ok=True)
 Path(DB_FOLDER).mkdir(exist_ok=True)
 
 # Initialize embedding model
-model = SentenceTransformer('paraphrase-MiniLM-L6-v2')  # Small, fast model
+embedding_model = SentenceTransformer('paraphrase-MiniLM-L6-v2')  # Small, fast model
 
-# Initialize fine-tuned model (lazy loading)
-finetuned_model = None
-finetuned_tokenizer = None
+# Global model variables
+current_model = None
+current_tokenizer = None
+current_model_id = None
 
 # Initialize FAISS index
 faiss_index = faiss.IndexFlatL2(VECTOR_DIMENSION)  # Renamed from 'index' to 'faiss_index'
 document_chunks = []  # Store text chunks corresponding to vectors
 
-def load_finetuned_model():
-    """Load the fine-tuned TinyLlama model."""
-    global finetuned_model, finetuned_tokenizer
+def get_available_models():
+    """Get list of available models with their status."""
+    models = []
     
-    if finetuned_model is None:
-        try:
-            print("Loading fine-tuned TinyLlama model...")
+    for model_id, config in AVAILABLE_MODELS.items():
+        model_info = {
+            "id": model_id,
+            "name": config["name"],
+            "type": config["type"],
+            "description": config["description"],
+            "available": False,
+            "path": ""
+        }
+        
+        # Check availability based on model type
+        if config["type"] == "lora":
+            # Check if both base model and LoRA path exist
+            base_available = check_model_exists(config["base_model"])
+            lora_available = os.path.exists(config["lora_path"])
+            model_info["available"] = base_available and lora_available
+            model_info["path"] = config["lora_path"]
+            model_info["base_model"] = config["base_model"]
             
-            # Check device availability
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            print(f"Using device: {device}")
+        elif config["type"] == "merged":
+            # Check if merged model path exists
+            model_info["available"] = os.path.exists(config["model_path"])
+            model_info["path"] = config["model_path"]
+            
+        elif config["type"] == "base":
+            # Check if base model is available
+            model_info["available"] = check_model_exists(config["model_path"])
+            model_info["path"] = config["model_path"]
+        
+        models.append(model_info)
+    
+    return models
+
+def check_model_exists(model_path):
+    """Check if a model exists locally or on HuggingFace."""
+    if os.path.exists(model_path):
+        return True
+    
+    # For HuggingFace models, we'll assume they're available
+    # You could add a more sophisticated check here
+    if not model_path.startswith('./') and not model_path.startswith('/'):
+        return True
+    
+    return False
+
+def load_model(model_id):
+    """Load a specific model by ID."""
+    global current_model, current_tokenizer, current_model_id
+    
+    if model_id == current_model_id and current_model is not None:
+        print(f"Model {model_id} already loaded")
+        return current_model, current_tokenizer
+    
+    # Clear previous model from memory
+    if current_model is not None:
+        del current_model
+        del current_tokenizer
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    
+    if model_id not in AVAILABLE_MODELS:
+        raise ValueError(f"Unknown model ID: {model_id}")
+    
+    config = AVAILABLE_MODELS[model_id]
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    print(f"Loading model: {config['name']} on {device}")
+    
+    try:
+        # Setup quantization for GPU
+        quantization_config = None
+        if device == "cuda":
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4"
+            )
+        
+        if config["type"] == "lora":
+            # Load base model + LoRA
+            print(f"Loading base model: {config['base_model']}")
             
             # Load tokenizer
-            finetuned_tokenizer = AutoTokenizer.from_pretrained(
-                BASE_MODEL_NAME,
+            current_tokenizer = AutoTokenizer.from_pretrained(
+                config["base_model"],
                 trust_remote_code=True,
                 padding_side="right"
             )
             
-            # Add pad token if it doesn't exist
-            if finetuned_tokenizer.pad_token is None:
-                finetuned_tokenizer.pad_token = finetuned_tokenizer.eos_token
-                finetuned_tokenizer.pad_token_id = finetuned_tokenizer.eos_token_id
+            # Add pad token if missing
+            if current_tokenizer.pad_token is None:
+                current_tokenizer.pad_token = current_tokenizer.eos_token
+                current_tokenizer.pad_token_id = current_tokenizer.eos_token_id
             
             # Load base model
             base_model = AutoModelForCausalLM.from_pretrained(
-                BASE_MODEL_NAME,
+                config["base_model"],
+                quantization_config=quantization_config,
                 device_map="auto" if device == "cuda" else None,
                 torch_dtype=torch.float16 if device == "cuda" else torch.float32,
                 trust_remote_code=True
@@ -77,30 +201,67 @@ def load_finetuned_model():
                 base_model = base_model.to(device)
             
             # Load LoRA weights
-            finetuned_model = PeftModel.from_pretrained(base_model, FINETUNED_MODEL_PATH)
-            finetuned_model.eval()
+            print(f"Loading LoRA weights from: {config['lora_path']}")
+            current_model = PeftModel.from_pretrained(base_model, config["lora_path"])
+            current_model.eval()
             
-            print("Fine-tuned model loaded successfully!")
+        elif config["type"] == "merged":
+            # Load merged model
+            print(f"Loading merged model from: {config['model_path']}")
             
-        except Exception as e:
-            print(f"Error loading fine-tuned model: {e}")
-            print("Falling back to base model...")
-            
-            # Fallback to base model
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            finetuned_tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_NAME)
-            if finetuned_tokenizer.pad_token is None:
-                finetuned_tokenizer.pad_token = finetuned_tokenizer.eos_token
-            
-            finetuned_model = AutoModelForCausalLM.from_pretrained(
-                BASE_MODEL_NAME,
-                device_map="auto" if device == "cuda" else None,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32
+            current_tokenizer = AutoTokenizer.from_pretrained(
+                config["model_path"],
+                trust_remote_code=True,
+                padding_side="right"
             )
+            
+            if current_tokenizer.pad_token is None:
+                current_tokenizer.pad_token = current_tokenizer.eos_token
+                current_tokenizer.pad_token_id = current_tokenizer.eos_token_id
+            
+            current_model = AutoModelForCausalLM.from_pretrained(
+                config["model_path"],
+                quantization_config=quantization_config,
+                device_map="auto" if device == "cuda" else None,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                trust_remote_code=True
+            )
+            
             if device == "cpu":
-                finetuned_model = finetuned_model.to(device)
-    
-    return finetuned_model, finetuned_tokenizer
+                current_model = current_model.to(device)
+            
+        elif config["type"] == "base":
+            # Load base model
+            print(f"Loading base model: {config['model_path']}")
+            
+            current_tokenizer = AutoTokenizer.from_pretrained(
+                config["model_path"],
+                trust_remote_code=True,
+                padding_side="right"
+            )
+            
+            if current_tokenizer.pad_token is None:
+                current_tokenizer.pad_token = current_tokenizer.eos_token
+                current_tokenizer.pad_token_id = current_tokenizer.eos_token_id
+            
+            current_model = AutoModelForCausalLM.from_pretrained(
+                config["model_path"],
+                quantization_config=quantization_config,
+                device_map="auto" if device == "cuda" else None,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                trust_remote_code=True
+            )
+            
+            if device == "cpu":
+                current_model = current_model.to(device)
+        
+        current_model_id = model_id
+        print(f"Successfully loaded model: {config['name']}")
+        return current_model, current_tokenizer
+        
+    except Exception as e:
+        print(f"Error loading model {model_id}: {e}")
+        raise e
 
 # Load existing index if available
 def load_index():
@@ -167,7 +328,7 @@ def add_document_to_index(file_path):
     
     # Get embeddings for all chunks
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = model.encode(texts)
+    embeddings = embedding_model.encode(texts)
     
     # Add to FAISS index
     faiss.normalize_L2(embeddings)
@@ -181,10 +342,13 @@ def add_document_to_index(file_path):
     save_index()
     return {"success": True, "chunks_added": len(chunks)}
 
-# Query using fine-tuned TinyLlama with retrieval augmentation
-def query_finetuned_model(query, top_k=3):
+# Query using selected model with retrieval augmentation
+def query_model(query, model_id=None, top_k=3):
+    if model_id is None:
+        model_id = DEFAULT_MODEL
+    
     # Get query embedding
-    query_embedding = model.encode([query])
+    query_embedding = embedding_model.encode([query])
     faiss.normalize_L2(query_embedding)
     
     # Search in FAISS
@@ -195,35 +359,36 @@ def query_finetuned_model(query, top_k=3):
     
     # Get relevant contexts
     contexts = []
+    sources = []
     for idx in I[0]:
         if idx < len(document_chunks):
             contexts.append(document_chunks[idx]["text"])
+            sources.append(document_chunks[idx]["metadata"]["source"])
     
     # Build prompt with context
     context_text = "\n\n".join(contexts)
-    prompt = f"""Document Context: {context_text}
-
-Question: {query}
-
-Answer: """
     
-    # Load model if not already loaded
-    model_instance, tokenizer = load_finetuned_model()
-    
-    if model_instance is None:
-        return {"error": "Failed to load fine-tuned model"}
+    # Use procurement-specific prompt format
+    prompt = f"""### Instruction:
+Answer the following question based on the provided procurement document context. Be specific and accurate.
+
+### Context:
+{context_text}
+
+### Question:
+{query}
+
+### Answer:
+"""
     
     try:
-        # Load model if not already loaded
-        model_instance, tokenizer = load_finetuned_model()
-        
-        if model_instance is None:
-            return {"error": "Failed to load fine-tuned model"}
+        # Load the specified model
+        model_instance, tokenizer = load_model(model_id)
         
         # Get device from model
         device = next(model_instance.parameters()).device
         
-        # Tokenize input and move to correct device
+        # Tokenize input
         inputs = tokenizer.encode(prompt, return_tensors="pt", max_length=1024, truncation=True)
         inputs = inputs.to(device)
         
@@ -235,7 +400,7 @@ Answer: """
             outputs = model_instance.generate(
                 inputs,
                 attention_mask=attention_mask,
-                max_length=inputs.shape[1] + 200,  # Generate up to 200 new tokens
+                max_length=inputs.shape[1] + 150,  # Generate up to 150 new tokens
                 temperature=0.7,
                 do_sample=True,
                 pad_token_id=tokenizer.eos_token_id,
@@ -248,7 +413,11 @@ Answer: """
         # Extract only the generated part (after the prompt)
         generated_text = response[len(prompt):].strip()
         
-        return {"response": generated_text if generated_text else "I couldn't generate a response based on the provided context."}
+        return {
+            "response": generated_text if generated_text else "I couldn't generate a response based on the provided context.",
+            "sources": list(set(sources)),
+            "model_used": AVAILABLE_MODELS[model_id]["name"]
+        }
         
     except Exception as e:
         return {"error": f"Error generating response: {str(e)}"}
@@ -256,7 +425,7 @@ Answer: """
 # Legacy Ollama function (keeping as fallback)
 def query_ollama(query, top_k=3):
     # Get query embedding
-    query_embedding = model.encode([query])
+    query_embedding = embedding_model.encode([query])
     faiss.normalize_L2(query_embedding)
     
     # Search in FAISS
@@ -338,13 +507,14 @@ def query():
     if not data or 'query' not in data:
         return jsonify({"error": "No query provided"}), 400
     
-    # Use fine-tuned model by default, fallback to Ollama if specified
+    # Get selected model ID, default to DEFAULT_MODEL
+    model_id = data.get('model_id', DEFAULT_MODEL)
     use_ollama = data.get('use_ollama', False)
     
     if use_ollama:
         result = query_ollama(data['query'])
     else:
-        result = query_finetuned_model(data['query'])
+        result = query_model(data['query'], model_id)
     
     return jsonify(result)
 
@@ -353,39 +523,26 @@ def serve_upload(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route('/models', methods=['GET'])
-def get_available_models():
-    """Get information about available models."""
+def get_models():
+    """Get list of available models."""
     return jsonify({
-        "models": [
-            {
-                "name": "finetuned_tinyllama",
-                "display_name": "Fine-tuned TinyLlama (Procurement)",
-                "description": "TinyLlama model fine-tuned on procurement documents",
-                "available": os.path.exists(FINETUNED_MODEL_PATH),
-                "default": True
-            },
-            {
-                "name": "ollama_llama3.2",
-                "display_name": "Llama 3.2 3B (Ollama)",
-                "description": "General-purpose Llama 3.2 model via Ollama",
-                "available": check_ollama_connection(),
-                "default": False
-            }
-        ]
+        "models": get_available_models(),
+        "default_model": DEFAULT_MODEL
     })
 
 @app.route('/status', methods=['GET'])
 def status():
-    # Check if fine-tuned model exists
-    finetuned_available = os.path.exists(FINETUNED_MODEL_PATH)
+    # Get model availability
+    models = get_available_models()
+    available_models = [m for m in models if m["available"]]
     
     return jsonify({
         "documents_count": len(set(chunk["metadata"]["source"] for chunk in document_chunks)),
         "chunks_count": len(document_chunks),
         "ollama_status": "connected" if check_ollama_connection() else "disconnected",
-        "finetuned_model_available": finetuned_available,
-        "finetuned_model_path": FINETUNED_MODEL_PATH,
-        "model_loaded": finetuned_model is not None
+        "available_models": len(available_models),
+        "current_model": current_model_id if current_model_id else None,
+        "model_loaded": current_model is not None
     })
 
 def check_ollama_connection():
