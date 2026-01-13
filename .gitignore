@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Model Weights and Large Files
+*.safetensors
+*.pth
+*.pt
+*.bin
+*.gguf
+*.h5
+*.ckpt
+
+# Databases
+*.sqlite3
+*.db
+
+# Logs
+wandb/
+*.log
+
+# Large Directories identified in workspace
+gemma3_v2_merged_model/
+gemma3-1b-finetuned-weska/
+models/
+comparison-results/
+results/
+tmp_eval/
