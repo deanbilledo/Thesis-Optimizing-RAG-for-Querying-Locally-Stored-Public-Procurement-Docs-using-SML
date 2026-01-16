@@ -1,0 +1,17 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Model folders
+app/base_model/
+app/embedding_model/
+app/knowledge_base/
+app/model/
+
+# Sessions data
+app/sessions/
+
+# Bundled Python and Tesseract (too large for git)
+python/
+tesseract/
