@@ -76,13 +76,13 @@ if HAS_STREAMLIT:
         local_base_model = Path(__file__).parent / 'base_model'
         
         if local_base_model.exists():
-            print(f"✅ Loading local base model from {local_base_model}")
+            print(f" Loading local base model from {local_base_model}")
             base_model_path = str(local_base_model)
         else:
-            print("⚠️ Local base model not found, downloading from HuggingFace...")
+            print(" Local base model not found, downloading from HuggingFace...")
             base_model_path = "google/gemma-2-2b-it"
         
-        print(f"⏳ Loading base model on {device}...")
+        print(f" Loading base model on {device}...")
         base_model = AutoModelForCausalLM.from_pretrained(
             base_model_path,
             torch_dtype=torch.float16 if device == 'cuda' else torch.float32,
