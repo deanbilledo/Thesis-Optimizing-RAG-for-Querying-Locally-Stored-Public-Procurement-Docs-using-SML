@@ -62,10 +62,6 @@ RAG-App/
 |   |-- vocab.txt
 |   |-- (other embedding files)
 |
-|-- knowledge_base/                 # RA 9184 compliance knowledge (OPTIONAL)
-|   |-- chroma_db/                  # Pre-populated knowledge base
-|       |-- chroma.sqlite3
-|       |-- (vector database files)
 |
 |-- sessions/                       # User sessions (AUTO-CREATED)
 |   |-- <session_id>/
