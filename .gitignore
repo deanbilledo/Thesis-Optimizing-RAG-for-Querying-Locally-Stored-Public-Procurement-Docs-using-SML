@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+.vs/
+*.swp
+*.swo
+
+# Session Data (don't commit user data)
+sessions/
+*.db
+*.sqlite
+
+# PDFs (don't commit user documents)
+test1/*.pdf
+*.pdf
+
+# Models (don't commit large model files)
+merged_model/
+*.gguf
+*.bin
+*.safetensors
+base_model/
+embedding_model/
+model/
+
+# Knowledge Base
+knowledge_base/
+
+# Portable Build
+portable_build/
+
+# RAG-System-Portable (entire folder)
+RAG-System-Portable/
+
+# Reports
+reports/
+
+# Desktop App Files
+desktop_app.py
+desktop_app.spec
+install_desktop.bat
+run_desktop.bat
+USER_MANUAL.md
+
+# Logo files
+logo.ico
+logo.png
+
+# ChromaDB
+chroma_db/
+*.parquet
+*.index
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Temporary
+*.tmp
+tmp/
+temp/
