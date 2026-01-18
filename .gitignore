@@ -33,10 +33,7 @@ test1/*.pdf
 merged_model/
 *.gguf
 *.bin
-*.safetensors
-base_model/
 embedding_model/
-model/
 
 # Knowledge Base
 knowledge_base/
